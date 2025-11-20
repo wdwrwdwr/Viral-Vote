@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ViralVote - 真實上傳版</title>
+    <title>ViralVote - 影片匿名投票</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
     <style>
+        /* CSS 樣式維持不變 */
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: #111; }
         ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
@@ -15,7 +16,6 @@
         video::-webkit-media-controls { display: none !important; }
         .like-anim { animation: pop 0.3s ease; }
         @keyframes pop { 0% { transform: scale(1); } 50% { transform: scale(1.3); } 100% { transform: scale(1); } }
-        /* 讀取條動畫 */
         .loader { border: 3px solid #f3f3f3; border-radius: 50%; border-top: 3px solid #3498db; width: 20px; height: 20px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
@@ -65,46 +65,39 @@
     </div>
 
     <script type="module">
-        // ----------------------------------------------------
-        // 1. 引入 Firebase 函式庫
-        // ----------------------------------------------------
+        
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getFirestore, collection, addDoc, updateDoc, doc, increment, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
         import { getStorage, ref, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
-        // ----------------------------------------------------
-        // 2. 【需修改】貼上你的 Firebase Config
-        // ----------------------------------------------------
+        // --------------------------------------------------------------------------------------
+        // ⚠️ 關鍵區塊一：請務必貼上你的 Firebase Config
+        // --------------------------------------------------------------------------------------
         const firebaseConfig = {
-            apiKey: "AIzaSyDxxxxxxxxx_你的API_KEY",
-            authDomain: "你的專案ID.firebaseapp.com",
-            projectId: "你的專案ID",
-            storageBucket: "你的專案ID.appspot.com",
-            messagingSenderId: "xxxxxx",
-            appId: "xxxxxx"
+            apiKey: "【請用你專案的 API KEY 代替】",
+            authDomain: "【請用你專案的 AUTH DOMAIN 代替】",
+            projectId: "【請用你專案的 PROJECT ID 代替】",
+            storageBucket: "【請用你專案的 STORAGE BUCKET 代替，格式為：專案ID.appspot.com】",
+            messagingSenderId: "【請用你專案的 SENDER ID 代替】",
+            appId: "【請用你專案的 APP ID 代替】"
         };
+        // --------------------------------------------------------------------------------------
 
-        // 初始化 Firebase
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const storage = getStorage(app);
         const videosCollection = collection(db, "videos");
-
-        // ----------------------------------------------------
-        // 3. 邏輯控制
-        // ----------------------------------------------------
         const grid = document.getElementById('videoGrid');
         const fileInput = document.getElementById('fileInput');
         const uploadStatus = document.getElementById('uploadStatus');
         const uploadText = document.getElementById('uploadText');
         const uploadBtn = document.getElementById('uploadBtn');
 
-        // --- A. 即時監聽資料庫 (Read) ---
-        // 使用 onSnapshot，當資料庫有新影片或愛心數變動，畫面會自動更新
+        // A. 即時監聽資料庫 (Read)
         const q = query(videosCollection, orderBy("createdAt", "desc"));
         
         onSnapshot(q, (snapshot) => {
-            grid.innerHTML = ""; // 清空舊內容
+            grid.innerHTML = ""; 
             
             if(snapshot.empty) {
                 grid.innerHTML = '<div class="col-span-full text-center text-gray-500 py-20">目前沒有影片，快來上傳第一個！</div>';
@@ -113,18 +106,16 @@
 
             snapshot.forEach(docSnap => {
                 const data = docSnap.data();
-                // 檢查本地是否按過讚 (用 localStorage 模擬匿名身分)
                 const isLikedLocally = localStorage.getItem(`liked_${docSnap.id}`) === 'true';
                 createVideoCard(docSnap.id, data, isLikedLocally);
             });
         });
 
-        // --- B. 上傳影片 (Create) ---
+        // B. 上傳影片 (Create)
         fileInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
 
-            // UI 切換為上傳中
             uploadBtn.disabled = true;
             uploadBtn.classList.add('opacity-50', 'cursor-not-allowed');
             uploadStatus.classList.remove('hidden');
@@ -140,8 +131,8 @@
                         uploadText.innerText = `上傳中 ${Math.round(progress)}%`;
                     }, 
                     (error) => {
-                        console.error(error);
-                        alert("上傳失敗");
+                        console.error("Upload Error:", error);
+                        alert("上傳失敗，請檢查 Storage 規則和網路連線。");
                         resetUploadUI();
                     }, 
                     async () => {
@@ -150,18 +141,18 @@
                         
                         // 3. 寫入資料庫 Firestore
                         await addDoc(videosCollection, {
-                            title: file.name.replace(/\.[^/.]+$/, ""), // 去除副檔名
+                            title: file.name.replace(/\.[^/.]+$/, ""),
                             src: downloadURL,
                             createdAt: serverTimestamp(),
-                            likes: 0 // 初始愛心數
+                            likes: 0
                         });
 
                         resetUploadUI();
                     }
                 );
             } catch (err) {
-                console.error(err);
-                alert("發生錯誤");
+                console.error("Init Error:", err);
+                alert("初始化上傳失敗，請檢查 Firebase Config 是否正確貼上。");
                 resetUploadUI();
             }
         });
@@ -173,12 +164,11 @@
             fileInput.value = '';
         }
 
-        // --- C. 建立卡片與互動 (UI Logic) ---
+        // C. 建立卡片與互動 (UI Logic) - 代碼省略... (保持不變)
         function createVideoCard(docId, data, isLiked) {
             const card = document.createElement('div');
             card.className = "group relative aspect-[9/16] bg-neutral-900 rounded-xl overflow-hidden cursor-pointer border border-white/5 hover:border-white/20 transition-all hover:shadow-xl hover:shadow-purple-500/10";
             
-            // 注意：preload="none" 節省流量，直到 hover 才載入
             card.innerHTML = `
                 <video 
                     src="${data.src}" 
@@ -205,7 +195,6 @@
             const heartIcon = likeBtn.querySelector('i');
             const modalTrigger = card.querySelector('.modal-trigger');
 
-            // Hover 播放
             card.addEventListener('mouseenter', async () => {
                 try { await videoEl.play(); } catch(e) {}
             });
@@ -214,37 +203,28 @@
                 videoEl.currentTime = 0;
             });
 
-            // 按讚邏輯 (寫入資料庫)
             likeBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                
-                // 檢查是否已經按過 (防止重複刷票，雖然是匿名的)
                 if (localStorage.getItem(`liked_${docId}`) === 'true') {
-                    // 這裡可以做「取消愛心」邏輯，為簡化我們先做「只能按一次」
                     return; 
                 }
 
-                // 前端UI先變色 (優化體驗)
                 heartIcon.classList.remove('fa-regular');
                 heartIcon.classList.add('fa-solid', 'text-red-500', 'like-anim');
-
-                // 寫入本地紀錄
                 localStorage.setItem(`liked_${docId}`, 'true');
 
-                // 寫入後端 (愛心數 +1)
                 const docRef = doc(db, "videos", docId);
                 await updateDoc(docRef, {
                     likes: increment(1)
                 });
             });
 
-            // 燈箱
             modalTrigger.addEventListener('click', () => {
                 window.openModal(data.title, data.src);
             });
         }
-
-        // --- D. 燈箱全域函數 ---
+        
+        // D. 燈箱全域函數 - 代碼省略... (保持不變)
         window.openModal = (title, src) => {
             const modal = document.getElementById('videoModal');
             const v = document.getElementById('modalVideo');
