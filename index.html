@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ViralVote - 影片匿名投票</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        /* CSS 樣式維持不變 */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #111; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        video::-webkit-media-controls { display: none !important; }
+        .like-anim { animation: pop 0.3s ease; }
+        @keyframes pop { 0% { transform: scale(1); } 50% { transform: scale(1.3); } 100% { transform: scale(1); } }
+        .loader { border: 3px solid #f3f3f3; border-radius: 50%; border-top: 3px solid #3498db; width: 20px; height: 20px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-neutral-950 text-white font-sans antialiased min-h-screen">
+
+    <nav class="fixed top-0 w-full z-50 bg-neutral-950/90 backdrop-blur-md border-b border-white/10">
+        <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <div class="w-8 h-8 bg-gradient-to-br from-purple-500 to-blue-500 rounded-lg"></div>
+                <span class="font-bold text-xl tracking-tight">ViralVote</span>
+            </div>
+            
+            <div class="flex items-center gap-4">
+                <div id="uploadStatus" class="hidden text-sm text-gray-300 flex items-center gap-2">
+                    <div class="loader"></div>
+                    <span id="uploadText">上傳中...</span>
+                </div>
+
+                <button id="uploadBtn" onclick="document.getElementById('fileInput').click()" 
+                        class="bg-white text-black px-4 py-2 rounded-full font-medium hover:bg-gray-200 transition-colors flex items-center gap-2 text-sm">
+                    <i class="fa-solid fa-upload"></i> 上傳影片
+                </button>
+            </div>
+            <input type="file" id="fileInput" accept="video/*" class="hidden">
+        </div>
+    </nav>
+
+    <main class="pt-24 pb-10 px-4 max-w-[1600px] mx-auto">
+        <div id="videoGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+            <div class="col-span-full text-center text-gray-500 py-20">
+                載入影片中...
+            </div>
+        </div>
+    </main>
+
+    <div id="videoModal" class="fixed inset-0 z-[60] bg-black/95 hidden flex items-center justify-center p-4">
+        <button onclick="closeModal()" class="absolute top-4 right-6 text-white/50 hover:text-white text-3xl z-50">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+        <div class="w-full max-w-5xl aspect-video relative bg-black rounded-lg overflow-hidden shadow-2xl border border-white/10">
+            <video id="modalVideo" class="w-full h-full object-contain" controls autoplay></video>
+            <div class="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black/90 to-transparent p-6 pointer-events-none">
+                <h2 id="modalTitle" class="text-2xl font-bold mb-2 text-white"></h2>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, updateDoc, doc, increment, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getStorage, ref, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
+
+        // --------------------------------------------------------------------------------------
+        // ⚠️ 關鍵區塊一：請務必貼上你的 Firebase Config
+        // --------------------------------------------------------------------------------------
+        const firebaseConfig = {
+            apiKey: "【請用你專案的 API KEY 代替】",
+            authDomain: "【請用你專案的 AUTH DOMAIN 代替】",
+            projectId: "【請用你專案的 PROJECT ID 代替】",
+            storageBucket: "【請用你專案的 STORAGE BUCKET 代替，格式為：專案ID.appspot.com】",
+            messagingSenderId: "【請用你專案的 SENDER ID 代替】",
+            appId: "【請用你專案的 APP ID 代替】"
+        };
+        // --------------------------------------------------------------------------------------
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const storage = getStorage(app);
+        const videosCollection = collection(db, "videos");
+        const grid = document.getElementById('videoGrid');
+        const fileInput = document.getElementById('fileInput');
+        const uploadStatus = document.getElementById('uploadStatus');
+        const uploadText = document.getElementById('uploadText');
+        const uploadBtn = document.getElementById('uploadBtn');
+
+        // A. 即時監聽資料庫 (Read)
+        const q = query(videosCollection, orderBy("createdAt", "desc"));
+        
+        onSnapshot(q, (snapshot) => {
+            grid.innerHTML = ""; 
+            
+            if(snapshot.empty) {
+                grid.innerHTML = '<div class="col-span-full text-center text-gray-500 py-20">目前沒有影片，快來上傳第一個！</div>';
+                return;
+            }
+
+            snapshot.forEach(docSnap => {
+                const data = docSnap.data();
+                const isLikedLocally = localStorage.getItem(`liked_${docSnap.id}`) === 'true';
+                createVideoCard(docSnap.id, data, isLikedLocally);
+            });
+        });
+
+        // B. 上傳影片 (Create)
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            uploadBtn.disabled = true;
+            uploadBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            uploadStatus.classList.remove('hidden');
+            
+            try {
+                // 1. 上傳檔案到 Firebase Storage
+                const storageRef = ref(storage, `videos/${Date.now()}_${file.name}`);
+                const uploadTask = uploadBytesResumable(storageRef, file);
+
+                uploadTask.on('state_changed', 
+                    (snapshot) => {
+                        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                        uploadText.innerText = `上傳中 ${Math.round(progress)}%`;
+                    }, 
+                    (error) => {
+                        console.error("Upload Error:", error);
+                        alert("上傳失敗，請檢查 Storage 規則和網路連線。");
+                        resetUploadUI();
+                    }, 
+                    async () => {
+                        // 2. 取得下載連結
+                        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+                        
+                        // 3. 寫入資料庫 Firestore
+                        await addDoc(videosCollection, {
+                            title: file.name.replace(/\.[^/.]+$/, ""),
+                            src: downloadURL,
+                            createdAt: serverTimestamp(),
+                            likes: 0
+                        });
+
+                        resetUploadUI();
+                    }
+                );
+            } catch (err) {
+                console.error("Init Error:", err);
+                alert("初始化上傳失敗，請檢查 Firebase Config 是否正確貼上。");
+                resetUploadUI();
+            }
+        });
+
+        function resetUploadUI() {
+            uploadBtn.disabled = false;
+            uploadBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            uploadStatus.classList.add('hidden');
+            fileInput.value = '';
+        }
+
+        // C. 建立卡片與互動 (UI Logic) - 代碼省略... (保持不變)
+        function createVideoCard(docId, data, isLiked) {
+            const card = document.createElement('div');
+            card.className = "group relative aspect-[9/16] bg-neutral-900 rounded-xl overflow-hidden cursor-pointer border border-white/5 hover:border-white/20 transition-all hover:shadow-xl hover:shadow-purple-500/10";
+            
+            card.innerHTML = `
+                <video 
+                    src="${data.src}" 
+                    class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                    loop muted playsinline preload="metadata"
+                ></video>
+
+                <div class="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-black/80 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4 pointer-events-none">
+                    <h3 class="text-white font-bold text-lg truncate drop-shadow-md">${data.title}</h3>
+                    <p class="text-gray-300 text-xs mt-1">點擊放大</p>
+                </div>
+
+                <button class="like-btn absolute top-3 right-3 w-10 h-10 rounded-full bg-black/30 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/50 transition-all opacity-0 group-hover:opacity-100 z-20 border border-white/10">
+                    <i class="${isLiked ? 'fa-solid text-red-500' : 'fa-regular'} fa-heart text-lg transition-transform"></i>
+                </button>
+                
+                <div class="modal-trigger absolute inset-0 z-10"></div>
+            `;
+
+            grid.appendChild(card);
+
+            const videoEl = card.querySelector('video');
+            const likeBtn = card.querySelector('.like-btn');
+            const heartIcon = likeBtn.querySelector('i');
+            const modalTrigger = card.querySelector('.modal-trigger');
+
+            card.addEventListener('mouseenter', async () => {
+                try { await videoEl.play(); } catch(e) {}
+            });
+            card.addEventListener('mouseleave', () => {
+                videoEl.pause();
+                videoEl.currentTime = 0;
+            });
+
+            likeBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (localStorage.getItem(`liked_${docId}`) === 'true') {
+                    return; 
+                }
+
+                heartIcon.classList.remove('fa-regular');
+                heartIcon.classList.add('fa-solid', 'text-red-500', 'like-anim');
+                localStorage.setItem(`liked_${docId}`, 'true');
+
+                const docRef = doc(db, "videos", docId);
+                await updateDoc(docRef, {
+                    likes: increment(1)
+                });
+            });
+
+            modalTrigger.addEventListener('click', () => {
+                window.openModal(data.title, data.src);
+            });
+        }
+        
+        // D. 燈箱全域函數 - 代碼省略... (保持不變)
+        window.openModal = (title, src) => {
+            const modal = document.getElementById('videoModal');
+            const v = document.getElementById('modalVideo');
+            document.getElementById('modalTitle').textContent = title;
+            v.src = src;
+            modal.classList.remove('hidden');
+            v.muted = false;
+        };
+
+        window.closeModal = () => {
+            const modal = document.getElementById('videoModal');
+            const v = document.getElementById('modalVideo');
+            modal.classList.add('hidden');
+            v.pause();
+            v.src = "";
+        };
+        
+        document.getElementById('videoModal').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('videoModal')) window.closeModal();
+        });
+
+    </script>
+</body>
+</html>
